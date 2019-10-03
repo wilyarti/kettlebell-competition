@@ -1,10 +1,12 @@
 import React, {Component} from 'react';
+import { instanceOf } from 'prop-types';
 import logo from './logo.svg';
 import './App.css';
 
 import 'bootstrap/dist/css/bootstrap.min.css';
 import Navbar from 'react-bootstrap/Navbar';
 import Table from 'react-bootstrap/Table';
+import Alert from 'react-bootstrap/Alert';
 import Container from 'react-bootstrap/Container';
 import Card from 'react-bootstrap/Card'
 import Form from 'react-bootstrap/Form';
@@ -14,12 +16,21 @@ import Button from 'react-bootstrap/Button';
 import Spinner from 'react-bootstrap/Spinner';
 import FeatherIcon from 'feather-icons-react';
 import {Line} from 'react-chartjs-2';
-import moment from 'moment-timezone';
+import moment from 'moment';
+import momentTZ from 'moment-timezone';
+import JSONDATA from './data';
+import USERDATA from './userData'
+import { withCookies, Cookies } from 'react-cookie';
 
+const uuidv1 = require('uuid/v1');
 
 class App extends Component {
+    static propTypes = {
+        cookies: instanceOf(Cookies).isRequired
+    };
     constructor(props) {
         super(props);
+        const { cookies } = props;
         this.state = {
             config: {
                 type: 'line',
@@ -33,34 +44,65 @@ class App extends Component {
                     data: [],
                 }]
             },
+            mockup: false,
             loading: false,
-            userID: '',
+            reloading: false,
+            userID: cookies.get('userID') || 0,
             userList: [],
-            kettlebell: 24,
+            kettlebell: cookies.get('kettlebell') || 24,
             handleSubmit: '',
-            repetitions: 10,
+            repetitions: cookies.get('repetitions') || 10,
             kettlebellPresses: [],
             userLookupTable: [],
-            userTotals: []
+            userTotals: [],
+            latest: '',
+            duration: cookies.get('duration') || 24,
+            theLead: 0,
+            theLeader: "NO LEADER"
         };
         this.handleSubmit = this.handleSubmit.bind(this);
+        this.handleReload = this.handleReload.bind(this);
         this.handleReps = this.handleReps.bind(this);
         this.handleKettlebell = this.handleKettlebell.bind(this);
         this.handleUserID = this.handleUserID.bind(this);
+        this.handleDuration = this.handleDuration.bind(this);
         this.loadData = this.loadData.bind(this);
         this.tallyTotals = this.tallyTotals.bind(this);
     }
 
     handleKettlebell(e) {
+        const cookie = e.target.value;
+        const { cookies } = this.props;
+        cookies.set('kettlebell', cookie);
         this.setState({kettlebell: e.target.value})
     }
 
     handleReps(e) {
+        const cookie = e.target.value;
+        const { cookies } = this.props;
+        cookies.set('repetitions', cookie);
         this.setState({repetitions: e.target.value})
     }
 
     handleUserID(e) {
+        const cookie = e.target.value;
+        const { cookies } = this.props;
+        cookies.set('userID', cookie);
         this.setState({userID: e.target.value})
+    }
+
+    handleReload() {
+        this.setState({reloading: true});
+        this.loadData()
+    }
+
+    handleDuration(e) {
+        const cookie = e.target.value;
+        const { cookies } = this.props;
+        cookies.set('duration', cookie);
+        this.setState({duration: e.target.value}, () => {
+            this.tallyTotals()
+        });
     }
 
     handleSubmit() {
@@ -93,8 +135,20 @@ class App extends Component {
         });
     }
 
+    //TODO add 30 second updater
+    //TODO add latest update memo
+    //TODO add 7 day rolling average
     loadData() {
-        this.setState({pageIsLoading: true});
+        this.setState({loading: true});
+        if (this.state.mockup) {
+            const data = JSONDATA;
+            console.log(data);
+            this.setState({kettlebellPresses: data, loading: false, reloading: false}, () => {
+                this.tallyTotals()
+            });
+            console.log(this.state);
+            return;
+        }
         fetch("/api/getKettlebellPresses").then(response => response.json())
             .then((data) => {
                 console.log(data);
@@ -104,11 +158,25 @@ class App extends Component {
                 alert(`${error} retrieving presses failed.`)
             }).finally(() => {
             this.tallyTotals();
+            this.setState({loading: false, reloading: false});
         })
     }
 
     getUsers() {
-        this.setState({pageIsLoading: true, userList: [], kettlebellPresses: []});
+        this.setState({loading: true, userList: [], kettlebellPresses: []});
+        if (this.state.mockup) {
+            let data = USERDATA;
+            console.log(data);
+            let lookup = {};
+            for (let i = 0, len = data.length; i < len; i++) {
+                lookup[data[i].id] = data[i];
+            }
+            console.log(data[0].id);
+            this.setState({userList: data, userLookupTable: lookup}, () => {
+                this.loadData(); console.log(this.state)
+            });
+            return;
+        }
         fetch("/api/getUserList").then(response => response.json())
             .then((data) => {
                 console.log(data);
@@ -116,7 +184,7 @@ class App extends Component {
                 for (let i = 0, len = data.length; i < len; i++) {
                     lookup[data[i].id] = data[i];
                 }
-                this.setState({userList: data, userID: data[0].id, userLookupTable: lookup})
+                this.setState({userList: data, userLookupTable: lookup})
             })
             .catch((error) => {
                 alert(`${error} retrieving users failed.`)
@@ -128,13 +196,16 @@ class App extends Component {
     tallyTotals() {
         let users = this.state.userList || [];
         let tempConfig = this.state.config;
+        let numDays = moment(new Date()).subtract(this.state.duration, 'hours');
+        let theLead = 0;
+        let theLeader = '';
         users.map((_, index) => {
             const presses = this.state.kettlebellPresses || [];
             users[index].totalReps = users[index].totalKgs = 0;
 
             // initialize our dataset
             tempConfig.datasets[index] = {
-                label: 'Data Summary',
+                label: 'Competitor',
                 //			backgroundColor: color(window.chartColors.red).alpha(0.5).rgbString(),
                 //		borderColor: window.chartColors.red,
                 fill: false,
@@ -148,34 +219,53 @@ class App extends Component {
             for (let set in presses) {
                 // this is the set you are looking for....
                 if (presses[set].uuid == users[index].id) {
-                    let prevTotalKg = users[index].totalKgs || 0;
-                    let prevTotalReps = users[index].totalReps || 0;
-                    users[index].totalKgs = parseInt((presses[set].repetitions * presses[set].weight) + prevTotalKg);
-                    users[index].totalReps = parseInt(presses[set].repetitions + prevTotalReps);
+                    if (moment(presses[set].createdTime).isBetween(numDays, new Date())) {
+                        let prevTotalKg = users[index].totalKgs || 0;
+                        let prevTotalReps = users[index].totalReps || 0;
+                        users[index].totalKgs = parseInt((presses[set].repetitions * presses[set].weight) + prevTotalKg);
+                        users[index].totalReps = parseInt(presses[set].repetitions + prevTotalReps);
 
-                    tempConfig.datasets[index].label = users[index].name;
-                    tempConfig.datasets[index].data.push({
-                        x: moment(presses[set].createdTime),
-                        y: parseInt((presses[set].repetitions * presses[set].weight) + prevTotalKg)
-                    });
+                        tempConfig.datasets[index].label = users[index].name;
+
+                        tempConfig.datasets[index].data.push({
+                            x: momentTZ(presses[set].createdTime),
+                            y: parseInt((presses[set].repetitions * presses[set].weight) + prevTotalKg)
+                        });
+                        if (users[index].totalKgs > theLead) {
+                            console.log("The lead has been taken. ");
+                            console.log(theLead + "beaten by " + users[index].totalKgs);
+                            theLead = users[index].totalKgs;
+                            theLeader = users[index].id;
+                        }
+                    }
                 }
             }
+            this.setState({latest: presses[presses.length-1], theLead, theLeader, leaderUpdated: true});
         });
         users.sort((a, b) => (a.totalKgs < b.totalKgs) ? 1 : -1);
-        console.log("new users inc totals: ");
-        console.log(users);
-        console.log(tempConfig);
+        //TODO fix this up. It doesn't handle empty userList's
+        if (!this.state.userID) {
+            this.setState({userID: 1});
+        }
         this.setState({userList: users, config: tempConfig});
+        this.forceUpdate()
     }
 
-    componentWillMount() {
+    componentDidMount() {
+        // runs a chain. getUsers, loadData and then tallyTotals
         this.getUsers();
     }
 
     render() {
         const users = this.state.userList || [];
+        const userLookupTable = this.state.userLookupTable || [];
+        const latestUUID = this.state.latest.uuid || [];
         const kbs = [16, 24, 32, 48];
-        const repRange = [5, 10, 25, 50, 100];
+        const repRange = [5, 10, 20, 50, 100, 200];
+        const nameOfDuration = ['1 hour', '3 hours', '6 hours', '12 hours', '24 hours', '2 days', '3 days', '14 days', '31 days'];
+        const durationDays = [1, 3, 6, 12, 24, 48, 72, 336, 744];
+        const latestAmount = parseInt(this.state.latest.repetitions * this.state.latest.weight) || 0;
+        const latestTime = moment(this.state.latest.createdTime).fromNow() || '';
         const userNameList = users.map((_, index) => {
             return (
                 <option key={index} value={users[index].id}>{users[index].name}</option>
@@ -191,16 +281,35 @@ class App extends Component {
                 <option key={index} value={kbs[index]}>{kbs[index]} kg</option>
             )
         });
-        const kettlebellsTable = users.map((_, index) => {
+        const duration = durationDays.map((_, index) => {
             return (
-                <tr>
+                <option key={index} value={durationDays[index]}>{nameOfDuration[index]}</option>
+            )
+        });
+        const kettlebellsTable = users.map((_, index) => {
+            let neededToLead = '';
+            const theLead  = this.state.theLead;
+            const theLeader = this.state.theLeader;
+            const kettlebell = this.state.kettlebell;
+            if (theLeader !== users[index].id) {
+                const neededReps = parseInt((theLead - users[index].totalKgs) / kettlebell) + 1;
+                neededToLead = " - " + neededReps + '  reps need to take the lead';
+            }
+            return (
+                <tr key={uuidv1()}>
                     <td>{index + 1}</td>
-                    <td>{users[index].name}</td>
-                    <td>{users[index].totalReps}</td>
-                    <td>{users[index].totalKgs}</td>
+                    <td>{users[index].name} {neededToLead}</td>
+                    <td>{users[index].totalReps} </td>
+                    <td>{users[index].totalKgs} </td>
                 </tr>
             )
         });
+
+        const latestResult =  (
+                this.state.latest &&
+                <Row><Alert>{ 'Latest: ' } { latestAmount } {'kg' } {latestTime} {' by'} {this.state.userLookupTable[latestUUID].name}</Alert>
+                </Row>
+            );
 
 
         return (
@@ -209,7 +318,7 @@ class App extends Component {
                     <Navbar.Brand href="#home">
                         <img
                             alt=""
-                            src="/static/favicon.ico"
+                            src="/static/favicon.png"
                             width="30"
                             height="30"
                             className="d-inline-block align-top"
@@ -217,6 +326,8 @@ class App extends Component {
                         {' KettleBell Competition'}
                     </Navbar.Brand>
                 </Navbar>
+                {this.state.mockup && <Alert variant={'danger'}>{'Warning running in mockup mode.'}</Alert>}
+
                 <Card>
                     <Card.Title><h3>Ranking</h3></Card.Title>
                     <Card.Body>
@@ -226,7 +337,7 @@ class App extends Component {
                                 <Line
                                     ref="chart"
                                     data={this.state.config}
-                                    height={400}
+                                    height={500}
                                     options={{
                                         maintainAspectRatio: false,
                                         responsive: true,
@@ -262,6 +373,34 @@ class App extends Component {
                             </Col>
                         </Row>
                         <Row>
+                            <Col xs={4}>
+                                <Form>
+                                    <Form.Group controlId="kbForm.duration">
+                                        <Form.Control
+                                            value={this.state.duration}
+                                            onChange={this.handleDuration} as="select">
+                                            {duration}
+                                        </Form.Control>
+                                    </Form.Group>
+                                </Form>
+                            </Col>
+                            <Col xs={2}>
+                                <Button variant={'primary'}
+                                        disabled={(this.state.reloading) || !this.state.userID}
+                                        onClick={!(this.state.reloading) ? this.handleReload : null}>
+                                    {(this.state.loading) ? <Spinner
+                                        as="span"
+                                        animation="grow"
+                                        size="sm"
+                                        role="status"
+                                        aria-hidden="true"
+                                    /> : ''}
+                                    {'Reload'}
+                                </Button>
+                            </Col>
+                        </Row>
+                        {latestResult}
+                        <Row>
                             <Col>
                                 <Table striped bordered hover>
                                     <thead>
@@ -278,7 +417,7 @@ class App extends Component {
                                 </Table>
                             </Col>
                         </Row>
-                        <Row >
+                        <Row>
                             <Col md={4}>
                                 <Form>
                                     <Form.Group controlId="kbForm.username">
@@ -336,4 +475,4 @@ function getRandomColor() {
     return color;
 }
 
-export default App;
+export default withCookies(App);
