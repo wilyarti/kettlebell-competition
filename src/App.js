@@ -1,26 +1,28 @@
 import React, {Component} from 'react';
-import { instanceOf } from 'prop-types';
+import {instanceOf} from 'prop-types';
 import logo from './logo.svg';
 import './App.css';
 
 import 'bootstrap/dist/css/bootstrap.min.css';
+import Container from 'react-bootstrap/Container';
 import Navbar from 'react-bootstrap/Navbar';
 import Table from 'react-bootstrap/Table';
 import Alert from 'react-bootstrap/Alert';
-import Container from 'react-bootstrap/Container';
 import Card from 'react-bootstrap/Card'
 import Form from 'react-bootstrap/Form';
 import Col from 'react-bootstrap/Col';
 import Row from 'react-bootstrap/Row';
 import Button from 'react-bootstrap/Button';
 import Spinner from 'react-bootstrap/Spinner';
-import FeatherIcon from 'feather-icons-react';
+import Toast from 'react-bootstrap/Toast';
 import {Line} from 'react-chartjs-2';
 import moment from 'moment';
 import momentTZ from 'moment-timezone';
-import JSONDATA from './data';
+import JSONDATA from './kettlebellPresses';
 import USERDATA from './userData'
-import { withCookies, Cookies } from 'react-cookie';
+import MYID from './myID'
+
+import {withCookies, Cookies} from 'react-cookie';
 
 const uuidv1 = require('uuid/v1');
 
@@ -28,9 +30,10 @@ class App extends Component {
     static propTypes = {
         cookies: instanceOf(Cookies).isRequired
     };
+
     constructor(props) {
         super(props);
-        const { cookies } = props;
+        const {cookies} = props;
         this.state = {
             config: {
                 type: 'line',
@@ -58,7 +61,9 @@ class App extends Component {
             latest: '',
             duration: cookies.get('duration') || 24,
             theLead: 0,
-            theLeader: "NO LEADER"
+            theLeader: "NO LEADER",
+            myID: '',
+            msgs: []
         };
         this.handleSubmit = this.handleSubmit.bind(this);
         this.handleReload = this.handleReload.bind(this);
@@ -68,25 +73,52 @@ class App extends Component {
         this.handleDuration = this.handleDuration.bind(this);
         this.loadData = this.loadData.bind(this);
         this.tallyTotals = this.tallyTotals.bind(this);
+        this.getMyID = this.getMyID.bind(this);
+        this.closeToast = this.closeToast.bind(this);
+        this.handleResponse = this.handleResponse.bind(this);
+    }
+
+    closeToast(index) {
+        let msgs = this.state.msgs;
+        delete (msgs[index]);
+        console.log(msgs);
+        console.log(index);
+        this.setState({msgs});
+    }
+
+    handleResponse(data, successTitle, failureTitle) {
+        let msgs = this.state.msgs;
+        let msg = {
+            name: '',
+            time: new moment(),
+            body: data.errorMessage
+        };
+        if (data.success === true) {
+            msg.name = successTitle;
+        } else {
+            msg.name = failureTitle;
+        }
+        msgs.push(msg);
+        this.setState({msgs});
     }
 
     handleKettlebell(e) {
         const cookie = e.target.value;
-        const { cookies } = this.props;
+        const {cookies} = this.props;
         cookies.set('kettlebell', cookie);
         this.setState({kettlebell: e.target.value})
     }
 
     handleReps(e) {
         const cookie = e.target.value;
-        const { cookies } = this.props;
+        const {cookies} = this.props;
         cookies.set('repetitions', cookie);
         this.setState({repetitions: e.target.value})
     }
 
     handleUserID(e) {
         const cookie = e.target.value;
-        const { cookies } = this.props;
+        const {cookies} = this.props;
         cookies.set('userID', cookie);
         this.setState({userID: e.target.value})
     }
@@ -98,7 +130,7 @@ class App extends Component {
 
     handleDuration(e) {
         const cookie = e.target.value;
-        const { cookies } = this.props;
+        const {cookies} = this.props;
         cookies.set('duration', cookie);
         this.setState({duration: e.target.value}, () => {
             this.tallyTotals()
@@ -109,7 +141,7 @@ class App extends Component {
         this.setState({loading: true});
         console.log(this.state);
         let data = {
-            uuid: this.state.userID,
+            uuid: this.state.myID,
             weight: this.state.kettlebell,
             repetitions: this.state.repetitions,
             createdTime: new Date()
@@ -123,12 +155,19 @@ class App extends Component {
                 }
             }).then(response => response.json())
             .then((data) => {
-                if (data.success !== true) {
-                    alert("Unable to add page." + data.errorMessage)
-                }
+                this.handleResponse(data, 'Successfully added set.', 'Unable to add set.');
+
             })
             .catch((error) => {
-                alert(`${error} retrieving pages failed.`)
+                let msgs = this.state.msgs;
+                let msg = {
+                        name: `Error adding set.`,
+                        time: new moment(),
+                        body: `Error: ${error}`
+                    }
+                ;
+                msgs.push(msg);
+                this.setState({msgs, pageIsLoading: false});
             }).finally(() => {
             this.loadData();
             this.setState({loading: false})
@@ -155,9 +194,37 @@ class App extends Component {
                 this.setState({kettlebellPresses: data})
             })
             .catch((error) => {
-                alert(`${error} retrieving presses failed.`)
+                let msgs = this.state.msgs;
+                let msg = {
+                        name: `Error loading sets.`,
+                        time: new moment(),
+                        body: `Error: ${error}`
+                    }
+                ;
+                msgs.push(msg);
+                this.setState({msgs, pageIsLoading: false});
             }).finally(() => {
             this.tallyTotals();
+            this.setState({loading: false, reloading: false});
+        })
+    }
+
+    getMyID() {
+        this.setState({loading: true});
+        if (this.state.mockup) {
+            this.setState({myID: MYID.id})
+        }
+        fetch("/api/getMyID").then(response => response.json())
+            .then((data) => {
+                console.log(data);
+                if (data.active === true) {
+                    this.setState({myID: data.id})
+                }
+            })
+            .catch((error) => {
+                alert(`${error} retrieving presses failed.`)
+            }).finally(() => {
+            this.getUsers();
             this.setState({loading: false, reloading: false});
         })
     }
@@ -173,7 +240,8 @@ class App extends Component {
             }
             console.log(data[0].id);
             this.setState({userList: data, userLookupTable: lookup}, () => {
-                this.loadData(); console.log(this.state)
+                this.loadData();
+                console.log(this.state)
             });
             return;
         }
@@ -187,7 +255,15 @@ class App extends Component {
                 this.setState({userList: data, userLookupTable: lookup})
             })
             .catch((error) => {
-                alert(`${error} retrieving users failed.`)
+                let msgs = this.state.msgs;
+                let msg = {
+                        name: `Error loading users.`,
+                        time: new moment(),
+                        body: `Error: ${error}`
+                    }
+                ;
+                msgs.push(msg);
+                this.setState({msgs, pageIsLoading: false});
             }).then(() => {
             this.loadData()
         })
@@ -240,7 +316,7 @@ class App extends Component {
                     }
                 }
             }
-            this.setState({latest: presses[presses.length-1], theLead, theLeader, leaderUpdated: true});
+            this.setState({latest: presses[presses.length - 1] || 0, theLead, theLeader, leaderUpdated: true});
         });
         users.sort((a, b) => (a.totalKgs < b.totalKgs) ? 1 : -1);
         //TODO fix this up. It doesn't handle empty userList's
@@ -248,12 +324,11 @@ class App extends Component {
             this.setState({userID: 1});
         }
         this.setState({userList: users, config: tempConfig});
-        this.forceUpdate()
     }
 
     componentDidMount() {
-        // runs a chain. getUsers, loadData and then tallyTotals
-        this.getUsers();
+        // runs a chain. getMyID then getUsers, loadData and then tallyTotals
+        this.getMyID();
     }
 
     render() {
@@ -288,7 +363,7 @@ class App extends Component {
         });
         const kettlebellsTable = users.map((_, index) => {
             let neededToLead = '';
-            const theLead  = this.state.theLead;
+            const theLead = this.state.theLead;
             const theLeader = this.state.theLeader;
             const kettlebell = this.state.kettlebell;
             if (theLeader !== users[index].id) {
@@ -305,15 +380,35 @@ class App extends Component {
             )
         });
 
-        const latestResult =  (
-                this.state.latest &&
-                <Row><Alert>{ 'Latest: ' } { latestAmount } {'kg' } {latestTime} {' by'} {this.state.userLookupTable[latestUUID].name}</Alert>
-                </Row>
-            );
-
+        const latestResult = (
+            this.state.latest &&
+            <Row><Alert>{'Latest: '} {latestAmount} {'kg'} {latestTime} {' by'} {this.state.userLookupTable[latestUUID].name}</Alert>
+            </Row>
+        );
+        const messages = this.state.msgs;
+        const msgs = messages.map((_, index) => {
+            return (
+                <Toast key={index + new Date()} show={true} onClose={() => this.closeToast(index)} autohide>
+                    <Toast.Header>
+                        <img style={{width: 20, height: 20}} src="favicon.png" className="rounded mr-2" alt=""/>
+                        <strong className="mr-auto">{messages[index].name}</strong>
+                        <small>{messages[index].time.fromNow()}</small>
+                    </Toast.Header>
+                    <Toast.Body>{messages[index].body}</Toast.Body>
+                </Toast>
+            )
+        });
 
         return (
-            <Container-fluid>
+            <Container fluid={true}>
+                <div style={{
+                    position: 'fixed',
+                    top: 1,
+                    right: 1,
+                    zIndex: 100,
+                }}>
+                    {msgs}
+                </div>
                 <Navbar bg="dark" variant="dark">
                     <Navbar.Brand href="#home">
                         <img
@@ -323,7 +418,7 @@ class App extends Component {
                             height="30"
                             className="d-inline-block align-top"
                         />
-                        {' KettleBell Competition'}
+                        {' Kettlebell Competition'}
                     </Navbar.Brand>
                 </Navbar>
                 {this.state.mockup && <Alert variant={'danger'}>{'Warning running in mockup mode.'}</Alert>}
@@ -417,17 +512,15 @@ class App extends Component {
                                 </Table>
                             </Col>
                         </Row>
+                        {!this.state.myID &&
+                        <Alert variant="danger">
+                            <a href={'/login'}>'Please login to your account'</a>
+                        </Alert>
+                        }
+                        {this.state.myID &&
                         <Row>
                             <Col md={4}>
                                 <Form>
-                                    <Form.Group controlId="kbForm.username">
-                                        <Form.Label>Username</Form.Label>
-                                        <Form.Control
-                                            value={this.state.userID}
-                                            onChange={this.handleUserID} as="select">
-                                            {userNameList}
-                                        </Form.Control>
-                                    </Form.Group>
                                     <Form.Group controlId="kbForm.reps">
                                         <Form.Label>Number Of Reps</Form.Label>
                                         <Form.Control
@@ -459,9 +552,10 @@ class App extends Component {
                                 </Button>
                             </Col>
                         </Row>
+                        }
                     </Card.Body>
                 </Card>
-            </Container-fluid>
+            </Container>
         );
     }
 }
