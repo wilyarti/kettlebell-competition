@@ -5,6 +5,7 @@
   "dependencies": {
     "bootstrap": "^4.3.1",
     "chart.js": "^2.8.0",
+    "distinct-colors": "^3.0.0",
     "feather-icons-react": "^0.3.2",
     "jquery": "^3.4.1",
     "moment": "^2.24.0",

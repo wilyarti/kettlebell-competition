@@ -15,12 +15,13 @@ import Row from 'react-bootstrap/Row';
 import Button from 'react-bootstrap/Button';
 import Spinner from 'react-bootstrap/Spinner';
 import Toast from 'react-bootstrap/Toast';
-import {Line} from 'react-chartjs-2';
+import {Line, Bar} from 'react-chartjs-2';
 import moment from 'moment';
 import momentTZ from 'moment-timezone';
 import JSONDATA from './kettlebellPresses';
 import USERDATA from './userData'
 import MYID from './myID'
+import distinctColors from 'distinct-colors';
 
 import {withCookies, Cookies} from 'react-cookie';
 
@@ -36,14 +37,14 @@ class App extends Component {
         const {cookies} = props;
         this.state = {
             config: {
-                type: 'line',
                 datasets: [{
                     label: 'Competitor',
-                    fill: false,
-                    lineTension: 0,
-                    pointRadius: 1,
-                    borderColor: getRandomColor(),
-                    borderWidth: .5,
+                    data: [],
+                }]
+            },
+            barChartConfig: {
+                datasets: [{
+                    label: 'Competitor',
                     data: [],
                 }]
             },
@@ -63,7 +64,9 @@ class App extends Component {
             theLead: 0,
             theLeader: "NO LEADER",
             myID: '',
-            msgs: []
+            msgs: [],
+            palette: distinctColors({count: 56}),
+
         };
         this.handleSubmit = this.handleSubmit.bind(this);
         this.handleReload = this.handleReload.bind(this);
@@ -222,7 +225,7 @@ class App extends Component {
                 }
             })
             .catch((error) => {
-                alert(`${error} retrieving presses failed.`)
+                console.log(`${error} retrieving id failed.`)
             }).finally(() => {
             this.getUsers();
             this.setState({loading: false, reloading: false});
@@ -233,12 +236,11 @@ class App extends Component {
         this.setState({loading: true, userList: [], kettlebellPresses: []});
         if (this.state.mockup) {
             let data = USERDATA;
-            console.log(data);
             let lookup = {};
             for (let i = 0, len = data.length; i < len; i++) {
                 lookup[data[i].id] = data[i];
             }
-            console.log(data[0].id);
+            console.log(data);
             this.setState({userList: data, userLookupTable: lookup}, () => {
                 this.loadData();
                 console.log(this.state)
@@ -247,11 +249,11 @@ class App extends Component {
         }
         fetch("/api/getUserList").then(response => response.json())
             .then((data) => {
-                console.log(data);
                 let lookup = {};
                 for (let i = 0, len = data.length; i < len; i++) {
                     lookup[data[i].id] = data[i];
                 }
+                console.log(data);
                 this.setState({userList: data, userLookupTable: lookup})
             })
             .catch((error) => {
@@ -272,23 +274,23 @@ class App extends Component {
     tallyTotals() {
         let users = this.state.userList || [];
         let tempConfig = this.state.config;
+        let tempbarChartConfig = this.state.barChartConfig;
+
         let numDays = moment(new Date()).subtract(this.state.duration, 'hours');
         let theLead = 0;
         let theLeader = '';
+        const presses = this.state.kettlebellPresses || [];
+        // Cumulative line chart
         users.map((_, index) => {
-            const presses = this.state.kettlebellPresses || [];
             users[index].totalReps = users[index].totalKgs = 0;
-
             // initialize our dataset
             tempConfig.datasets[index] = {
                 label: 'Competitor',
-                //			backgroundColor: color(window.chartColors.red).alpha(0.5).rgbString(),
-                //		borderColor: window.chartColors.red,
                 fill: false,
                 lineTension: 0,
-                pointRadius: 1,
-                borderColor: getRandomColor(),
-                borderWidth: .5,
+                pointRadius: 2,
+                borderColor: this.state.palette[index],
+                borderWidth: 2,
                 data: [],
             };
 
@@ -308,8 +310,6 @@ class App extends Component {
                             y: parseInt((presses[set].repetitions * presses[set].weight) + prevTotalKg)
                         });
                         if (users[index].totalKgs > theLead) {
-                            console.log("The lead has been taken. ");
-                            console.log(theLead + "beaten by " + users[index].totalKgs);
                             theLead = users[index].totalKgs;
                             theLeader = users[index].id;
                         }
@@ -319,11 +319,52 @@ class App extends Component {
             this.setState({latest: presses[presses.length - 1] || 0, theLead, theLeader, leaderUpdated: true});
         });
         users.sort((a, b) => (a.totalKgs < b.totalKgs) ? 1 : -1);
+        // Daily bar chart
+        users.map((_, index) => {
+            // initialize our dataset
+            tempbarChartConfig.datasets[index] = {
+                fill: false,
+                lineTension: 0,
+                pointRadius: 2,
+                borderColor: this.state.palette[index],
+                borderWidth: 2,
+                data: [],
+            };
+            tempbarChartConfig.datasets[index].label = users[index].name;
+
+            let newPressData = [];
+            for (let set in presses) {
+                if ((moment(presses[set].createdTime).isBetween(numDays, new Date())) && (presses[set].uuid == users[index].id)) {
+                    let name = moment(presses[set].createdTime).format("YYYY-MM-DD");
+                    let oldValue = 0;
+                    if (typeof newPressData[name] === 'undefined') {
+                        newPressData[name] = {}
+                        oldValue = 0;
+                    } else {
+                        oldValue = newPressData[name].value;
+                    }
+                    newPressData[name].value = oldValue + (presses[set].repetitions * presses[set].weight);
+                    newPressData[name].uuid = presses[set].uuid;
+                    newPressData[name].createdTime = moment(presses[set].createdTime).format('YYYY-MM-DD');
+                }
+            }
+            console.log(newPressData);
+            for (let set in newPressData) {
+                // this is the set you are looking for....
+                if (newPressData[set].uuid == users[index].id) {
+                        tempbarChartConfig.datasets[index].data.push({
+                            x: momentTZ(set),
+                            y: parseInt(newPressData[set].value)
+                        });
+                }
+            }
+        });
+        console.log(tempbarChartConfig);
         //TODO fix this up. It doesn't handle empty userList's
         if (!this.state.userID) {
             this.setState({userID: 1});
         }
-        this.setState({userList: users, config: tempConfig});
+        this.setState({userList: users, config: tempConfig, barChartConfig: tempbarChartConfig});
     }
 
     componentDidMount() {
@@ -336,9 +377,9 @@ class App extends Component {
         const userLookupTable = this.state.userLookupTable || [];
         const latestUUID = this.state.latest.uuid || [];
         const kbs = [16, 24, 32, 48];
-        const repRange = [5, 10, 20, 50, 100, 200];
-        const nameOfDuration = ['1 hour', '3 hours', '6 hours', '12 hours', '24 hours', '2 days', '3 days', '14 days', '31 days'];
-        const durationDays = [1, 3, 6, 12, 24, 48, 72, 336, 744];
+        const repRange = [1, 5, 10, 15, 20, 25, ,30, 50, 100, 200];
+        const nameOfDuration = ['1 hour', '3 hours', '6 hours', '12 hours', '24 hours', '2 days', '3 days', '7 days', '14 days', '31 days', 'One year'];
+        const durationDays = [1, 3, 6, 12, 24, 48, 72, 168, 336, 744, 8760];
         const latestAmount = parseInt(this.state.latest.repetitions * this.state.latest.weight) || 0;
         const latestTime = moment(this.state.latest.createdTime).fromNow() || '';
         const userNameList = users.map((_, index) => {
@@ -427,10 +468,9 @@ class App extends Component {
                     <Card.Title><h3>Ranking</h3></Card.Title>
                     <Card.Body>
                         <Row>
-
                             <Col>
                                 <Line
-                                    ref="chart"
+                                    ref={"chart"}
                                     data={this.state.config}
                                     height={500}
                                     options={{
@@ -465,8 +505,50 @@ class App extends Component {
                                         }
                                     }}
                                 />
+
                             </Col>
                         </Row>
+                        {this.state.duration >= (24*7) &&
+                            <Row>
+                                <Col>
+                                    <Bar
+                                        data={this.state.barChartConfig}
+                                        height={500}
+                                        options={{
+                                            maintainAspectRatio: false,
+                                            responsive: true,
+                                            title: {
+                                                display: true,
+                                                text: `Kettlebell Press Competition`
+                                            },
+                                            scales: {
+                                                xAxes: [{
+                                                    type: 'time',
+                                                    display: true,
+                                                    scaleLabel: {
+                                                        display: true,
+                                                        labelString: "Days",
+                                                    },
+                                                    ticks: {
+                                                        major: {
+                                                            fontStyle: 'bold',
+                                                            fontColor: '#FF0000'
+                                                        }
+                                                    }
+                                                }],
+                                                yAxes: [{
+                                                    display: true,
+                                                    scaleLabel: {
+                                                        display: true,
+                                                        labelString: 'KGs'
+                                                    }
+                                                }]
+                                            }
+                                        }}
+                                    />
+                                </Col>
+                            </Row>
+                        }
                         <Row>
                             <Col xs={4}>
                                 <Form>
@@ -514,7 +596,7 @@ class App extends Component {
                         </Row>
                         {!this.state.myID &&
                         <Alert variant="danger">
-                            <a href={'/login'}>'Please login to your account'</a>
+                            <a href={'/login'}>Please login to your account.</a>
                         </Alert>
                         }
                         {this.state.myID &&
